@@ -2,10 +2,9 @@
 
 A compact, two-line footer for [Pi](https://github.com/earendil-works/pi) with model and thinking status, working directory, Git state, session name, context usage, and provider quota information.
 
-```text
-● model: gpt-5.6-sol │ effort: high │ dir: ~/Project/app │ git: main* │ session: feature-work
-▸ context ■■■□□□□□□□ 31% (325k/1.1M) │ weekly ■■■□□□□□□□ 34% (reset 4d2h)
-```
+## Preview
+
+![pi-footer showing model, effort, working directory, Git branch, context usage, and weekly quota](assets/pi-footer-preview.png)
 
 ## Features
 
