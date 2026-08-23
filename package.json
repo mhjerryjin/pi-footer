@@ -1,0 +1,46 @@
+{
+  "name": "@mhjerryjin/pi-footer",
+  "version": "0.1.0",
+  "description": "A compact two-line Pi footer with model, git, session, context, and provider quota status.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "footer",
+    "context",
+    "usage",
+    "quota"
+  ],
+  "author": "Jerry (https://github.com/mhjerryjin)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mhjerryjin/pi-footer.git"
+  },
+  "homepage": "https://github.com/mhjerryjin/pi-footer#readme",
+  "bugs": {
+    "url": "https://github.com/mhjerryjin/pi-footer/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}
