@@ -1,6 +1,6 @@
 {
   "name": "@mhjerryjin/pi-footer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A compact Pi footer showing model, effort, Git status, context usage, and provider quotas.",
   "type": "module",
   "keywords": [
@@ -34,7 +34,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/mhjerryjin/pi-footer/main/assets/pi-footer-preview.png"
   },
   "files": [
     "index.ts",

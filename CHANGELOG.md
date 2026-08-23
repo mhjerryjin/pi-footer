@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Add the footer screenshot to the Pi Package Gallery metadata.
+- Update npm installation and package listing documentation.
+
 ## 0.1.0
 
 - Publish the initial `@mhjerryjin/pi-footer` package.
