@@ -4,7 +4,7 @@ A compact, two-line footer for [Pi](https://github.com/earendil-works/pi) with m
 
 ## Preview
 
-![pi-footer showing model, effort, working directory, Git branch, context usage, and weekly quota](assets/pi-footer-preview.png)
+![pi-footer showing model, effort, working directory, Git branch, context usage, and weekly quota](https://raw.githubusercontent.com/mhjerryjin/pi-footer/main/assets/pi-footer-preview.png)
 
 ## Features
 
@@ -27,8 +27,6 @@ pi install git:github.com/mhjerryjin/pi-footer
 ```
 
 ### npm
-
-After the npm package is published:
 
 ```bash
 pi install npm:@mhjerryjin/pi-footer

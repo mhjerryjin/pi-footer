@@ -1,7 +1,7 @@
 {
   "name": "@mhjerryjin/pi-footer",
   "version": "0.1.0",
-  "description": "A compact two-line Pi footer with model, git, session, context, and provider quota status.",
+  "description": "A compact Pi footer showing model, effort, Git status, context usage, and provider quotas.",
   "type": "module",
   "keywords": [
     "pi-package",
