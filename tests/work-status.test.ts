@@ -94,6 +94,8 @@ function createHarness(options: { rpc?: boolean } = {}) {
     },
     async start() {
       await emitHook("session_start", {});
+      // Pi core restores its built-in title after extension session_start.
+      titles.push("π - project");
       await new Promise((resolve) => setTimeout(resolve, 20));
       const footer = footerFactory(
         { requestRender() {} },
@@ -118,6 +120,7 @@ test("work row stays reserved and summarizes tools plus Fleet counts", async () 
 
   assert.equal(harness.titles.at(-1), "pi · project");
   await harness.emitHook("session_info_changed", { name: "footer-work" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(harness.titles.at(-1), "pi · footer-work");
   assert.deepEqual(render().length, 3);
   assert.equal(render()[2], "");

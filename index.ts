@@ -1623,6 +1623,7 @@ export default function (pi: ExtensionAPI) {
   let footerAttached = false;
   let workRenderTimer: ReturnType<typeof setInterval> | null = null;
   let fleetRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let terminalTitleTimer: ReturnType<typeof setTimeout> | null = null;
   let sessionGeneration = 0;
   let sessionActive = false;
   const FLEET_STALE_AFTER_MS = 6000;
@@ -1939,6 +1940,21 @@ export default function (pi: ExtensionAPI) {
     tuiRef?.requestRender();
   }
 
+  function scheduleTerminalTitle(
+    ctx: any,
+    sessionName: string | undefined,
+  ): void {
+    if (!setTerminalTitle || !ctx.hasUI) return;
+    if (terminalTitleTimer) clearTimeout(terminalTitleTimer);
+    const generation = sessionGeneration;
+    terminalTitleTimer = setTimeout(() => {
+      terminalTitleTimer = null;
+      if (!sessionActive || generation !== sessionGeneration) return;
+      ctx.ui.setTitle(buildTerminalTitle(sessionName, ctx.cwd));
+    }, 0);
+    terminalTitleTimer.unref?.();
+  }
+
   function refreshGitFooter(): void {
     if (refreshGitCache()) tuiRef?.requestRender();
   }
@@ -2050,9 +2066,10 @@ export default function (pi: ExtensionAPI) {
 
     if (!ctx.hasUI) return;
 
-    if (setTerminalTitle) {
-      ctx.ui.setTitle(buildTerminalTitle(pi.getSessionName(), ctx.cwd));
-    }
+    // Pi restores its built-in `π - session - project` title after extension
+    // session_start handlers finish. Defer ours by one event-loop turn so the
+    // user-selected format remains authoritative.
+    scheduleTerminalTitle(ctx, pi.getSessionName());
 
     ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
       tuiRef = tui;
@@ -2186,6 +2203,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     sessionGeneration += 1;
     sessionActive = false;
+    if (terminalTitleTimer) {
+      clearTimeout(terminalTitleTimer);
+      terminalTitleTimer = null;
+    }
     resetWorkStatus();
     for (const dispose of eventDisposers.splice(0)) dispose();
   });
@@ -2195,9 +2216,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_info_changed", (event, ctx) => {
-    if (setTerminalTitle && ctx.hasUI) {
-      ctx.ui.setTitle(buildTerminalTitle(event.name, ctx.cwd));
-    }
+    scheduleTerminalTitle(ctx, event.name);
     tuiRef?.requestRender();
   });
 

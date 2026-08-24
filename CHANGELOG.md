@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- Fix terminal titles being overwritten by Pi's built-in title update after session startup, reload, or rename.
+
 ## 0.1.3
 
 - Keep terminal tab titles synchronized as `pi · <session>`, with the project name as fallback.
