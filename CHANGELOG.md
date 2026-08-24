@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
 - Add a stable reserved work-status row for active parent tools without layout shifts.
 - Integrate optionally with `pi-subagents` Fleet Status RPC for active agent and background-run counts.
 - Replace the context disclosure triangle with a usage-oriented `◐` icon that follows context threshold colors.
+- Restrict CommandCode shared-auth lookup to provider-scoped credentials.
+- Clear stale quota data immediately on provider switches and display a non-weekly fallback window when needed.
+- Make OpenCode session-cost scanning asynchronous and enforce the documented Zen 30-day window.
+- Add terminal-text sanitization, boundary-aware home abbreviation, automated tests, type checking, and CI.
 
 ## 0.1.1
 

@@ -90,17 +90,17 @@ The extension contains quota adapters for:
 - OpenCode Go and OpenCode Zen
 - OpenRouter
 
-The customized compact layout displays a `weekly` block only when the active provider returns a weekly quota window. Model, effort, Git, session, and context information remain available for other Pi models and providers.
+The compact layout prefers a `weekly` window. When a provider has no weekly window, it displays the provider's most-used available quota or balance window instead.
 
 ## Credentials and privacy
 
-To query quota endpoints, the extension reads credentials already stored by Pi in `~/.pi/agent/auth.json`, standard provider environment variables, and documented provider-specific local credential files. Credentials are used only for the selected provider's quota request and are not printed or sent to an author-operated service.
+To query quota endpoints, the extension reads provider-scoped credentials already stored by Pi in `~/.pi/agent/auth.json`, standard provider environment variables, and documented provider-specific local credential files. Credentials are used only for the selected provider's request and are not printed or sent to an author-operated service. OpenCode Go/Zen values are local estimates based only on Pi session records.
 
 See [SECURITY.md](SECURITY.md) for the complete credential and network behavior.
 
 ## Platform notes
 
-The implementation uses cross-platform Node.js APIs and is designed for macOS, Linux, and Windows. Git information requires `git` on `PATH`. The symbols `●`, `▸`, `■`, and `│` require a modern Unicode-capable terminal; Windows Terminal is recommended on Windows.
+The implementation uses cross-platform Node.js APIs and is designed for macOS, Linux, and Windows. Git information requires `git` on `PATH`. The symbols `●`, `◐`, `↳`, `■`, and `│` require a modern Unicode-capable terminal; Windows Terminal is recommended on Windows.
 
 ## Credits
 

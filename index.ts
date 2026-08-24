@@ -12,7 +12,12 @@ import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { execSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import {
+  readFile as readFileAsync,
+  readdir as readdirAsync,
+  stat as statAsync,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -84,6 +89,32 @@ function parseBooleanEnv(
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+export function sanitizeFooterText(value: string): string {
+  return value.replace(
+    /[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g,
+    "",
+  );
+}
+
+export function abbreviateHomePath(
+  cwd: string,
+  home: string | undefined,
+  platform = process.platform,
+): string {
+  if (!home) return cwd;
+  const trimmedHome = home.replace(/[\\/]+$/, "") || home;
+  const compareCwd = platform === "win32" ? cwd.toLowerCase() : cwd;
+  const compareHome =
+    platform === "win32" ? trimmedHome.toLowerCase() : trimmedHome;
+  if (compareCwd === compareHome) return "~";
+  if (!compareCwd.startsWith(compareHome)) return cwd;
+
+  const boundary = cwd.slice(trimmedHome.length, trimmedHome.length + 1);
+  return boundary === "/" || boundary === "\\"
+    ? `~${cwd.slice(trimmedHome.length)}`
+    : cwd;
 }
 
 // ============ Git Cache ============
@@ -642,7 +673,9 @@ async function fetchGeminiUsage(): Promise<UsageSnapshot> {
     for (const bucket of data.buckets || []) {
       const model = bucket.modelId || "unknown";
       const frac = bucket.remainingFraction ?? 1;
-      if (!quotas[model] || frac < quotas[model]) quotas[model] = frac;
+      if (quotas[model] === undefined || frac < quotas[model]) {
+        quotas[model] = frac;
+      }
     }
 
     const windows: RateWindow[] = [];
@@ -909,29 +942,79 @@ async function fetchKimiUsage(): Promise<UsageSnapshot> {
 
 // ============ CommandCode Usage ============
 
+function nonEmptyCredential(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+/**
+ * Resolve only CommandCode-scoped credentials from a parsed auth file.
+ * A generic root apiKey is accepted exclusively for CommandCode's own file;
+ * shared multi-provider stores must use provider-scoped fields.
+ */
+export function resolveCommandCodeCredential(
+  parsed: unknown,
+  allowGenericApiKey = false,
+): string | undefined {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const auth = parsed as Record<string, unknown>;
+  if (allowGenericApiKey) {
+    const generic = nonEmptyCredential(auth.apiKey);
+    if (generic) return generic;
+  }
+
+  const commandcode = auth.commandcode;
+  const direct = nonEmptyCredential(commandcode);
+  if (direct) return direct;
+  if (commandcode && typeof commandcode === "object") {
+    const access = nonEmptyCredential(
+      (commandcode as Record<string, unknown>).access,
+    );
+    if (access) return access;
+  }
+
+  const official = auth["command-code"];
+  if (official && typeof official === "object") {
+    const key = nonEmptyCredential(
+      (official as Record<string, unknown>).key,
+    );
+    if (key) return key;
+  }
+
+  return undefined;
+}
+
 function getCommandCodeApiKey(): string | undefined {
   if (process.env.COMMANDCODE_API_KEY) return process.env.COMMANDCODE_API_KEY;
 
-  const authPaths = [
-    join(homedir(), ".commandcode", "auth.json"),
-    join(homedir(), ".pi", "agent", "auth.json"),
-    join(homedir(), ".omp", "agent", "auth.json"),
+  const authSources = [
+    {
+      path: join(homedir(), ".commandcode", "auth.json"),
+      allowGenericApiKey: true,
+    },
+    {
+      path: join(homedir(), ".pi", "agent", "auth.json"),
+      allowGenericApiKey: false,
+    },
+    {
+      path: join(homedir(), ".omp", "agent", "auth.json"),
+      allowGenericApiKey: false,
+    },
   ];
 
-  for (const authPath of authPaths) {
+  for (const source of authSources) {
     try {
-      if (!existsSync(authPath)) continue;
-      const parsed = JSON.parse(readFileSync(authPath, "utf-8"));
-      if (typeof parsed.apiKey === "string") return parsed.apiKey;
-      if (typeof parsed.commandcode === "string") return parsed.commandcode;
-      // pi OAuth: {"commandcode": {"type":"oauth","access":"..."}}
-      const cc = parsed.commandcode;
-      if (cc && typeof cc === "object" && typeof cc.access === "string")
-        return cc.access;
-      // Official CC CLI: {"command-code": {"type":"api","key":"..."}}
-      const cc2 = parsed["command-code"];
-      if (cc2 && typeof cc2 === "object" && typeof cc2.key === "string")
-        return cc2.key;
+      if (!existsSync(source.path)) continue;
+      const parsed: unknown = JSON.parse(readFileSync(source.path, "utf-8"));
+      const credential = resolveCommandCodeCredential(
+        parsed,
+        source.allowGenericApiKey,
+      );
+      if (credential) return credential;
     } catch {}
   }
   return undefined;
@@ -1133,28 +1216,31 @@ const costFileCache = new Map<
   }
 >();
 
-function collectProviderCosts(
+async function collectProviderCosts(
   provider: string,
-): Array<{ ts: number; cost: number }> {
+): Promise<Array<{ ts: number; cost: number }>> {
   const cutoff = Date.now() - COST_SCAN_AGE_MS;
   const out: Array<{ ts: number; cost: number }> = [];
 
   try {
-    for (const rel of readdirSync(COST_SESSION_ROOT, { recursive: true })) {
+    for (const rel of await readdirAsync(COST_SESSION_ROOT, {
+      recursive: true,
+    })) {
       if (typeof rel !== "string" || !rel.endsWith(".jsonl")) continue;
       const path = join(COST_SESSION_ROOT, rel);
-      const st = statSync(path);
+      const st = await statAsync(path);
       if (st.mtimeMs < cutoff) continue;
 
       const cached = costFileCache.get(path);
       if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
-        for (const p of cached.pairs)
+        for (const p of cached.pairs) {
           if (p.provider === provider) out.push({ ts: p.ts, cost: p.cost });
+        }
         continue;
       }
 
       const pairs: Array<{ ts: number; cost: number; provider: string }> = [];
-      for (const line of readFileSync(path, "utf8").split("\n")) {
+      for (const line of (await readFileAsync(path, "utf8")).split("\n")) {
         if (!line) continue;
         try {
           const e = JSON.parse(line);
@@ -1173,8 +1259,9 @@ function collectProviderCosts(
         } catch {}
       }
       costFileCache.set(path, { size: st.size, mtimeMs: st.mtimeMs, pairs });
-      for (const p of pairs)
+      for (const p of pairs) {
         if (p.provider === provider) out.push({ ts: p.ts, cost: p.cost });
+      }
     }
   } catch {
     return out;
@@ -1194,7 +1281,7 @@ function weekStartUtcMs(now: number): number {
 }
 
 async function fetchOpenCodeGoUsage(): Promise<UsageSnapshot> {
-  const costs = collectProviderCosts("opencode-go");
+  const costs = await collectProviderCosts("opencode-go");
   const now = Date.now();
   const sumSince = (since: number) =>
     costs.reduce((acc, c) => (c.ts >= since ? acc + c.cost : acc), 0);
@@ -1222,8 +1309,13 @@ async function fetchOpenCodeGoUsage(): Promise<UsageSnapshot> {
 }
 
 async function fetchOpenCodeZenUsage(): Promise<UsageSnapshot> {
-  const costs = collectProviderCosts("opencode");
-  const spent = costs.reduce((acc, c) => acc + c.cost, 0);
+  const now = Date.now();
+  const cutoff = now - 30 * 24 * 60 * 60 * 1000;
+  const costs = await collectProviderCosts("opencode");
+  const spent = costs.reduce(
+    (acc, c) => (c.ts >= cutoff ? acc + c.cost : acc),
+    0,
+  );
   return {
     provider: "OpenCode Zen",
     windows: [{ label: `$${spent.toFixed(2)} spent`, usedPercent: 0 }],
@@ -1351,11 +1443,12 @@ export default function (pi: ExtensionAPI) {
 
   function headerColor(tone: HeaderTone, text: string, theme: any): string {
     const color = HEADER_COLORS[tone];
+    const safeText = sanitizeFooterText(text);
     const ansi =
       theme.getColorMode() === "256color"
         ? `\u001b[38;5;${color.ansi256}m`
         : `\u001b[38;2;${color.rgb[0]};${color.rgb[1]};${color.rgb[2]}m`;
-    return `${NORMAL_INTENSITY}${ansi}${text}\u001b[39m`;
+    return `${NORMAL_INTENSITY}${ansi}${safeText}\u001b[39m`;
   }
 
   function getProgressTone(percentage: number): ProgressTone {
@@ -1434,55 +1527,66 @@ export default function (pi: ExtensionAPI) {
     return `${theme.fg("text", window.label)} ${bar} ${pct}${timeStr}`;
   }
 
-  function renderWeeklyUsage(usage: UsageSnapshot, theme: any): string {
+  function renderProviderUsage(usage: UsageSnapshot, theme: any): string {
     const weeklyWindow = usage.windows.find((window) =>
       window.label.toLowerCase().includes("week"),
     );
-    if (!weeklyWindow) return "";
+    const selectedWindow =
+      weeklyWindow ??
+      usage.windows.reduce<RateWindow | undefined>(
+        (selected, window) =>
+          !selected || window.usedPercent > selected.usedPercent
+            ? window
+            : selected,
+        undefined,
+      );
+    if (!selectedWindow) return "";
 
-    return renderUsageWindow({ ...weeklyWindow, label: "weekly" }, theme, {
-      barWidth: 10,
-      includeReset: true,
-    });
+    return renderUsageWindow(
+      weeklyWindow ? { ...selectedWindow, label: "weekly" } : selectedWindow,
+      theme,
+      {
+        barWidth: 10,
+        includeReset: true,
+      },
+    );
   }
 
-  function getThinkingLevel(ctx: any): string {
-    const entries = ctx.sessionManager.getEntries();
-    const leafId = ctx.sessionManager.getLeafId();
-    const context = buildSessionContext(entries, leafId);
-    return context.thinkingLevel || "off";
-  }
-
-  function getContextInfo(ctx: any): {
+  function getSessionFooterState(ctx: any): {
+    thinkingLevel: string;
     percentage: number;
     used: number;
     total: number;
   } {
-    const model = ctx.model;
-    const contextWindow = model?.contextWindow ?? 0;
-    if (contextWindow === 0) return { percentage: 0, used: 0, total: 0 };
-
     const entries = ctx.sessionManager.getEntries();
     const leafId = ctx.sessionManager.getLeafId();
     const context = buildSessionContext(entries, leafId);
-    const messages = context.messages;
+    const contextWindow = ctx.model?.contextWindow ?? 0;
+    const base = {
+      thinkingLevel: context.thinkingLevel || "off",
+      percentage: 0,
+      used: 0,
+      total: contextWindow,
+    };
+    if (contextWindow === 0) return base;
 
-    const lastAssistant = messages
+    const lastAssistant = context.messages
       .slice()
       .reverse()
       .find(
-        (m: any) => m.role === "assistant" && m.stopReason !== "aborted",
+        (message: any) =>
+          message.role === "assistant" && message.stopReason !== "aborted",
       ) as any;
-
     const usage = lastAssistant?.usage;
-    if (!usage) return { percentage: 0, used: 0, total: contextWindow };
+    if (!usage) return base;
+
     const contextTokens =
       (usage.input ?? 0) +
       (usage.output ?? 0) +
       (usage.cacheRead ?? 0) +
       (usage.cacheWrite ?? 0);
-
     return {
+      thinkingLevel: base.thinkingLevel,
       percentage: (contextTokens / contextWindow) * 100,
       used: contextTokens,
       total: contextWindow,
@@ -1845,8 +1949,12 @@ export default function (pi: ExtensionAPI) {
     const cached = usageCache.get(provider);
     if (cached && cached.windows.length > 0) {
       latestUsage = cached;
-      tuiRef?.requestRender();
+    } else {
+      // Never carry another provider's quota into the new selection while its
+      // first request is still in flight.
+      latestUsage = null;
     }
+    tuiRef?.requestRender();
 
     // Fetch fresh in background — keep cached data on transient errors
     fetchUsageForProvider(provider)
@@ -1955,17 +2063,15 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           const {
+            thinkingLevel,
             percentage,
             used: ctxUsed,
             total: ctxTotal,
-          } = getContextInfo(ctx);
+          } = getSessionFooterState(ctx);
 
           // Build parts for status line
-          let pwd = ctx.cwd;
           const home = process.env.HOME || process.env.USERPROFILE;
-          if (home && pwd.startsWith(home)) {
-            pwd = `~${pwd.slice(home.length)}`;
-          }
+          const pwd = abbreviateHomePath(ctx.cwd, home);
 
           let branchStr = "";
           if (showBranch && gitCache?.branch) {
@@ -1980,7 +2086,6 @@ export default function (pi: ExtensionAPI) {
 
           // Model + thinking
           const modelName = ctx.model?.id?.split("/").pop() || "no-model";
-          const thinkingLevel = getThinkingLevel(ctx);
           const statusIcon = progressColor(0, "●", theme);
           const modelBlock =
             `${statusIcon} ` +
@@ -2022,8 +2127,8 @@ export default function (pi: ExtensionAPI) {
               includeCounts: false,
             }),
           ]);
-          const weeklyUsage = latestUsage
-            ? renderWeeklyUsage(latestUsage, theme)
+          const providerUsage = latestUsage
+            ? renderProviderUsage(latestUsage, theme)
             : "";
 
           const firstLine = [
@@ -2036,7 +2141,7 @@ export default function (pi: ExtensionAPI) {
             .filter(Boolean)
             .join(sep);
           const contextIcon = progressColor(percentage, "◐", theme);
-          const secondLine = [`${contextIcon} ${contextBlock}`, weeklyUsage]
+          const secondLine = [`${contextIcon} ${contextBlock}`, providerUsage]
             .filter(Boolean)
             .join(sep);
 

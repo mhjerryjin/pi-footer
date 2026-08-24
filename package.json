@@ -1,6 +1,6 @@
 {
   "name": "@mhjerryjin/pi-footer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A compact Pi footer showing model, Git, context, quotas, and active work/subagent status.",
   "type": "module",
   "keywords": [
@@ -24,9 +24,20 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-coding-agent": ">=0.80.0 <1",
+    "@earendil-works/pi-tui": ">=0.80.0 <1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
   },
   "publishConfig": {
     "access": "public"
