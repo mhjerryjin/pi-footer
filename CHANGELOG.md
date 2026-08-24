@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep terminal tab titles synchronized as `pi · <session>`, with the project name as fallback.
+- Document the VS Code `${sequence}` tab-title setting.
+
 ## 0.1.2
 
 - Add a stable reserved work-status row for active parent tools without layout shifts.

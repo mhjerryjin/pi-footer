@@ -18,7 +18,7 @@ import {
   readdir as readdirAsync,
   stat as statAsync,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 // ============ Types ============
@@ -115,6 +115,15 @@ export function abbreviateHomePath(
   return boundary === "/" || boundary === "\\"
     ? `~${cwd.slice(trimmedHome.length)}`
     : cwd;
+}
+
+export function buildTerminalTitle(
+  sessionName: string | undefined,
+  cwd: string,
+): string {
+  const safeSession = sanitizeFooterText(sessionName ?? "").trim();
+  const safeProject = sanitizeFooterText(basename(cwd)).trim() || "pi";
+  return `pi · ${safeSession || safeProject}`.slice(0, 120);
 }
 
 // ============ Git Cache ============
@@ -1401,6 +1410,10 @@ export default function (pi: ExtensionAPI) {
     process.env.PI_MINIMAL_FOOTER_SHOW_WORK_STATUS,
     true,
   );
+  const setTerminalTitle = parseBooleanEnv(
+    process.env.PI_MINIMAL_FOOTER_SET_TERMINAL_TITLE,
+    true,
+  );
 
   function formatTokenCount(tokens: number): string {
     if (tokens >= 1_000_000) {
@@ -2037,6 +2050,10 @@ export default function (pi: ExtensionAPI) {
 
     if (!ctx.hasUI) return;
 
+    if (setTerminalTitle) {
+      ctx.ui.setTitle(buildTerminalTitle(pi.getSessionName(), ctx.cwd));
+    }
+
     ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
       tuiRef = tui;
       footerAttached = true;
@@ -2177,7 +2194,10 @@ export default function (pi: ExtensionAPI) {
     refreshGitFooter();
   });
 
-  pi.on("session_info_changed", () => {
+  pi.on("session_info_changed", (event, ctx) => {
+    if (setTerminalTitle && ctx.hasUI) {
+      ctx.ui.setTitle(buildTerminalTitle(event.name, ctx.cwd));
+    }
     tuiRef?.requestRender();
   });
 

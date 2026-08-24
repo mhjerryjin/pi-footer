@@ -8,6 +8,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
   const hooks = new Map<string, Handler[]>();
   const bus = new Map<string, Handler[]>();
   let footerFactory: any;
+  const titles: string[] = [];
   let fleet: any = {
     version: 1,
     entries: [],
@@ -73,6 +74,9 @@ function createHarness(options: { rpc?: boolean } = {}) {
       setFooter(factory: any) {
         footerFactory = factory;
       },
+      setTitle(title: string) {
+        titles.push(title);
+      },
     },
   };
 
@@ -84,6 +88,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
     context,
     events,
     emitHook,
+    titles,
     setFleet(value: any) {
       fleet = value;
     },
@@ -111,6 +116,9 @@ test("work row stays reserved and summarizes tools plus Fleet counts", async () 
   const harness = createHarness();
   const { footer, render } = await harness.start();
 
+  assert.equal(harness.titles.at(-1), "pi · project");
+  await harness.emitHook("session_info_changed", { name: "footer-work" });
+  assert.equal(harness.titles.at(-1), "pi · footer-work");
   assert.deepEqual(render().length, 3);
   assert.equal(render()[2], "");
 

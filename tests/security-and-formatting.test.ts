@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   abbreviateHomePath,
+  buildTerminalTitle,
   resolveCommandCodeCredential,
   sanitizeFooterText,
 } from "../index.ts";
@@ -47,6 +48,21 @@ test("footer text strips terminal controls and bidi overrides", () => {
   assert.equal(
     sanitizeFooterText("safe\u001b[31m\nname\u202E"),
     "safe[31mname",
+  );
+});
+
+test("terminal title prefers a sanitized session name and falls back to project", () => {
+  assert.equal(
+    buildTerminalTitle(" footer-work ", "/Users/jerry/pi-footer"),
+    "pi · footer-work",
+  );
+  assert.equal(
+    buildTerminalTitle(undefined, "/Users/jerry/pi-footer"),
+    "pi · pi-footer",
+  );
+  assert.equal(
+    buildTerminalTitle("bad\u001b]2;title\u0007", "/tmp/project"),
+    "pi · bad]2;title",
   );
 });
 

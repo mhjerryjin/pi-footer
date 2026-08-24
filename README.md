@@ -44,7 +44,21 @@ Set a session name with Pi's built-in command:
 /name feature-work
 ```
 
-The footer updates immediately when the name changes.
+The footer and terminal tab title update immediately when the name changes:
+
+```text
+pi · feature-work
+```
+
+Without an explicit session name, the title falls back to the current project, for example `pi · pi-footer`.
+
+Most terminal emulators honor the title sequence automatically. VS Code defaults to the foreground process name (`node`); set this in VS Code User Settings to display the title sent by Pi:
+
+```json
+{
+  "terminal.integrated.tabs.title": "${sequence}"
+}
+```
 
 ## Work status
 
@@ -73,6 +87,7 @@ All environment variables are optional:
 | `PI_MINIMAL_FOOTER_SHOW_CWD`          | Show the current working directory                       | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_BRANCH`       | Show Git branch, dirty state, and ahead/behind counts    | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_WORK_STATUS`  | Reserve and show the work summary row                     | `1`     |
+| `PI_MINIMAL_FOOTER_SET_TERMINAL_TITLE` | Update terminal title from the session/project name       | `1`     |
 
 Accepted false values are `0`, `false`, `no`, and `off` (case-insensitive).
 
