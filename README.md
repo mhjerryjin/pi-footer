@@ -1,14 +1,14 @@
 # pi-footer
 
-A compact, two-line footer for [Pi](https://github.com/earendil-works/pi) with model and thinking status, working directory, Git state, session name, context usage, and provider quota information.
+A compact footer for [Pi](https://github.com/earendil-works/pi) with two core status rows plus a stable work-status row for active tools and subagents. It shows model and thinking status, working directory, Git state, session name, context usage, provider quotas, and active work.
 
 ## Preview
 
-![pi-footer showing model, effort, working directory, Git branch, context usage, and weekly quota](https://raw.githubusercontent.com/mhjerryjin/pi-footer/main/assets/pi-footer-preview.png)
+![pi-footer showing model, effort, working directory, Git branch, context usage, weekly quota, and active agents](https://raw.githubusercontent.com/mhjerryjin/pi-footer/main/assets/pi-footer-preview.png)
 
 ## Features
 
-- Two aligned, background-free status rows
+- Two aligned, background-free core rows plus a stable work-status row
 - Model, thinking level, working directory, Git branch, and `/name` session display
 - Git dirty state plus ahead/behind counts
 - Context usage with token counts
@@ -17,6 +17,8 @@ A compact, two-line footer for [Pi](https://github.com/earendil-works/pi) with m
 - Theme-independent usage thresholds: green below 50%, yellow from 50% to below 75%, red at 75% and above
 - Truecolor output with a 256-color fallback
 - Automatic refresh on startup, model changes, session renames, Git changes, and every five minutes for quotas
+- Active parent tool and `pi-subagents` agent/background counts without layout shifts
+- Distinct `●` model, threshold-colored `◐` context, and `↳` work-status icons
 
 ## Install
 
@@ -44,6 +46,23 @@ Set a session name with Pi's built-in command:
 
 The footer updates immediately when the name changes.
 
+## Work status
+
+While work is active, a compact third row appears automatically:
+
+```text
+● model: gpt-5.6-sol │ effort: high │ git: main
+◐ context ■■■□□□□□□□ 31% │ weekly ■■■□□□□□□□ 34%
+↳ task: bash · 12s │ agents: 2 │ bg: 1/4
+```
+
+- `task`/`tasks` tracks tools currently running in the parent Pi session.
+- `agents` is the active child count reported by `pi-subagents` Fleet Status RPC.
+- `bg` is active top-level asynchronous subagent work and its configured capacity.
+- The row stays reserved but blank while idle, preventing the editor and footer from jumping when work starts or stops.
+
+The `pi-subagents` integration is optional and uses its versioned in-process event-bus API, so `pi-footer` has no hard dependency on that package. FleetView remains responsible for per-agent details and controls such as inspect, stop, and steer.
+
 ## Configuration
 
 All environment variables are optional:
@@ -53,6 +72,7 @@ All environment variables are optional:
 | `PI_MINIMAL_FOOTER_SHOW_SESSION_NAME` | Show the explicit session name set with `/name`          | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_CWD`          | Show the current working directory                       | `1`     |
 | `PI_MINIMAL_FOOTER_SHOW_BRANCH`       | Show Git branch, dirty state, and ahead/behind counts    | `1`     |
+| `PI_MINIMAL_FOOTER_SHOW_WORK_STATUS`  | Reserve and show the work summary row                     | `1`     |
 
 Accepted false values are `0`, `false`, `no`, and `off` (case-insensitive).
 

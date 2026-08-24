@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add a stable reserved work-status row for active parent tools without layout shifts.
+- Integrate optionally with `pi-subagents` Fleet Status RPC for active agent and background-run counts.
+- Replace the context disclosure triangle with a usage-oriented `◐` icon that follows context threshold colors.
+
 ## 0.1.1
 
 - Add the footer screenshot to the Pi Package Gallery metadata.

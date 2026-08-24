@@ -11,6 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { buildSessionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { execSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -43,6 +44,25 @@ interface AuthJson {
   "github-copilot"?: { refresh?: string };
   "openai-codex"?: { access?: string; accountId?: string };
   "google-gemini-cli"?: { access?: string };
+}
+
+interface ActiveToolStatus {
+  toolCallId: string;
+  toolName: string;
+  startedAt: number;
+}
+
+interface SubagentFleetSummary {
+  totalActive: number;
+  backgroundUsed: number;
+  backgroundLimit: number;
+}
+
+interface SubagentRpcReply {
+  version?: unknown;
+  requestId?: unknown;
+  success?: unknown;
+  data?: unknown;
 }
 
 // ============ Usage Cache ============
@@ -1285,6 +1305,10 @@ export default function (pi: ExtensionAPI) {
     process.env.PI_MINIMAL_FOOTER_SHOW_BRANCH,
     true,
   );
+  const showWorkStatus = parseBooleanEnv(
+    process.env.PI_MINIMAL_FOOTER_SHOW_WORK_STATUS,
+    true,
+  );
 
   function formatTokenCount(tokens: number): string {
     if (tokens >= 1_000_000) {
@@ -1473,6 +1497,331 @@ export default function (pi: ExtensionAPI) {
   // Store tui reference for triggering re-renders from event handlers
   let tuiRef: { requestRender: () => void } | null = null;
 
+  const activeTools = new Map<string, ActiveToolStatus>();
+  let fleetSummary: SubagentFleetSummary | null = null;
+  let subagentRpcAvailable = false;
+  let fleetRequestInFlight = false;
+  let fleetUpdatedAt = 0;
+  let fleetConsecutiveFailures = 0;
+  let footerAttached = false;
+  let workRenderTimer: ReturnType<typeof setInterval> | null = null;
+  let fleetRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let sessionGeneration = 0;
+  let sessionActive = false;
+  const FLEET_STALE_AFTER_MS = 6000;
+  const SUBAGENT_RPC_TIMEOUT_MS = 1500;
+  const MAX_FLEET_REFRESH_RETRIES = 3;
+
+  const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
+  const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
+  const SUBAGENT_RPC_READY_EVENT = "subagents:rpc:v1:ready";
+  const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
+  const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
+  const SUBAGENT_TOOL_NAMES = new Set([
+    "subagent",
+    "subagent_wait",
+    "subagent_supervisor",
+  ]);
+
+  function activeMainTools(): ActiveToolStatus[] {
+    return [...activeTools.values()].filter(
+      (tool) =>
+        !subagentRpcAvailable || !SUBAGENT_TOOL_NAMES.has(tool.toolName),
+    );
+  }
+
+  function sanitizeToolName(name: string): string {
+    const normalized = name.replace(/[^a-zA-Z0-9_.:-]/g, "");
+    return normalized || "tool";
+  }
+
+  function formatElapsed(startedAt: number): string {
+    const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m${seconds % 60}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h${minutes % 60}m`;
+  }
+
+  function renderWorkStatus(width: number, theme: any): string {
+    if (!showWorkStatus) return "";
+
+    const tools = activeMainTools();
+    const segments: string[] = [];
+    const compact: string[] = [];
+    const sep = theme.fg("text", " │ ");
+
+    if (tools.length === 1) {
+      const tool = tools[0];
+      segments.push(
+        theme.fg("text", "task: ") +
+          progressColor(0, sanitizeToolName(tool.toolName), theme) +
+          theme.fg("dim", ` · ${formatElapsed(tool.startedAt)}`),
+      );
+      compact.push(theme.fg("text", "task 1"));
+    } else if (tools.length > 1) {
+      const names = [
+        ...new Set(tools.map((tool) => sanitizeToolName(tool.toolName))),
+      ];
+      segments.push(
+        theme.fg("text", `tasks: ${tools.length} · `) +
+          progressColor(0, names.slice(0, 3).join(", "), theme) +
+          (names.length > 3 ? theme.fg("dim", ` +${names.length - 3}`) : ""),
+      );
+      compact.push(theme.fg("text", `tasks ${tools.length}`));
+    }
+
+    const agents = fleetSummary?.totalActive ?? 0;
+    if (agents > 0) {
+      segments.push(
+        theme.fg("text", "agents: ") +
+          progressColor(0, String(agents), theme),
+      );
+      compact.push(theme.fg("text", `agents ${agents}`));
+    }
+
+    const backgroundUsed = fleetSummary?.backgroundUsed ?? 0;
+    const backgroundLimit = fleetSummary?.backgroundLimit ?? 0;
+    if (backgroundUsed > 0) {
+      const count =
+        backgroundLimit > 0
+          ? `${backgroundUsed}/${backgroundLimit}`
+          : String(backgroundUsed);
+      segments.push(
+        theme.fg("text", "bg: ") + progressColor(0, count, theme),
+      );
+      compact.push(theme.fg("text", `bg ${backgroundUsed}`));
+    }
+
+    if (segments.length === 0) return "";
+
+    const icon = progressColor(0, "↳", theme);
+    const fullLine = `${icon} ${segments.join(sep)}`;
+    const compactLine = `${icon} ${compact.join(sep)}`;
+    return fitFooterSegment(width, [fullLine, compactLine]);
+  }
+
+  function nonNegativeInteger(value: unknown): number | null {
+    return typeof value === "number" &&
+      Number.isSafeInteger(value) &&
+      value >= 0
+      ? value
+      : null;
+  }
+
+  function parseFleetSummary(value: unknown): SubagentFleetSummary | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const data = value as Record<string, unknown>;
+    const fleet = data.fleet;
+    if (!fleet || typeof fleet !== "object" || Array.isArray(fleet)) return null;
+    const record = fleet as Record<string, unknown>;
+    if (record.version !== 1) return null;
+
+    const totalActive = nonNegativeInteger(record.totalActive);
+    if (totalActive === null) return null;
+
+    // Fleet Status v1 originally omitted capacity. Treat it as zero so older
+    // pi-subagents releases still provide the active child count.
+    const capacity = record.topLevelAsyncCapacity;
+    if (capacity === undefined) {
+      return { totalActive, backgroundUsed: 0, backgroundLimit: 0 };
+    }
+    if (
+      !capacity ||
+      typeof capacity !== "object" ||
+      Array.isArray(capacity)
+    ) {
+      return null;
+    }
+
+    const capacityRecord = capacity as Record<string, unknown>;
+    const backgroundUsed = nonNegativeInteger(capacityRecord.used);
+    const backgroundLimit = nonNegativeInteger(capacityRecord.limit);
+    if (backgroundUsed === null || backgroundLimit === null) return null;
+
+    return { totalActive, backgroundUsed, backgroundLimit };
+  }
+
+  function stopWorkTimers(): void {
+    if (workRenderTimer) {
+      clearInterval(workRenderTimer);
+      workRenderTimer = null;
+    }
+    if (fleetRefreshTimer) {
+      clearInterval(fleetRefreshTimer);
+      fleetRefreshTimer = null;
+    }
+  }
+
+  function syncWorkTimers(): void {
+    if (!showWorkStatus || !sessionActive || !footerAttached) {
+      stopWorkTimers();
+      return;
+    }
+
+    const hasWork =
+      activeMainTools().length > 0 ||
+      (fleetSummary?.totalActive ?? 0) > 0 ||
+      (fleetSummary?.backgroundUsed ?? 0) > 0;
+
+    if (hasWork && !workRenderTimer) {
+      workRenderTimer = setInterval(() => tuiRef?.requestRender(), 1000);
+      workRenderTimer.unref?.();
+    } else if (!hasWork && workRenderTimer) {
+      clearInterval(workRenderTimer);
+      workRenderTimer = null;
+    }
+
+    const hasSubagentWork =
+      subagentRpcAvailable &&
+      ((fleetSummary?.totalActive ?? 0) > 0 ||
+        (fleetSummary?.backgroundUsed ?? 0) > 0);
+    if (hasSubagentWork && !fleetRefreshTimer) {
+      fleetRefreshTimer = setInterval(() => refreshFleetStatus(), 2000);
+      fleetRefreshTimer.unref?.();
+    } else if (!hasSubagentWork && fleetRefreshTimer) {
+      clearInterval(fleetRefreshTimer);
+      fleetRefreshTimer = null;
+    }
+  }
+
+  function requestSubagentRpc(
+    method: "ping" | "status",
+    generation: number,
+  ): Promise<unknown | null> {
+    return new Promise((resolve) => {
+      if (!sessionActive || generation !== sessionGeneration) {
+        resolve(null);
+        return;
+      }
+
+      const requestId = randomUUID();
+      let settled = false;
+      let unsubscribe: (() => void) | undefined;
+      const finish = (value: unknown | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        unsubscribe?.();
+        resolve(value);
+      };
+      const timeout = setTimeout(
+        () => finish(null),
+        SUBAGENT_RPC_TIMEOUT_MS,
+      );
+      timeout.unref?.();
+
+      const maybeUnsubscribe = pi.events.on(
+        `${SUBAGENT_RPC_REPLY_PREFIX}${requestId}`,
+        (payload: unknown) => {
+          const reply = payload as SubagentRpcReply;
+          if (
+            reply?.version !== 1 ||
+            reply.requestId !== requestId ||
+            reply.success !== true
+          ) {
+            finish(null);
+            return;
+          }
+          finish(reply.data ?? null);
+        },
+      );
+      if (typeof maybeUnsubscribe === "function") unsubscribe = maybeUnsubscribe;
+
+      pi.events.emit(SUBAGENT_RPC_REQUEST_EVENT, {
+        version: 1,
+        requestId,
+        method,
+        params: {},
+        source: { extension: "@mhjerryjin/pi-footer" },
+      });
+    });
+  }
+
+  async function probeSubagentRpc(generation = sessionGeneration): Promise<void> {
+    if (!showWorkStatus || !sessionActive) return;
+    const data = await requestSubagentRpc("ping", generation);
+    if (!sessionActive || generation !== sessionGeneration) return;
+
+    const record =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : null;
+    const capabilities = record?.capabilities;
+    const fleetCapability =
+      capabilities && typeof capabilities === "object"
+        ? (capabilities as Record<string, unknown>).fleetStatus
+        : null;
+    subagentRpcAvailable = Boolean(
+      fleetCapability &&
+        typeof fleetCapability === "object" &&
+        (fleetCapability as Record<string, unknown>).version === 1,
+    );
+
+    if (subagentRpcAvailable) refreshFleetStatus(generation);
+  }
+
+  async function refreshFleetStatus(
+    generation = sessionGeneration,
+  ): Promise<void> {
+    if (
+      !showWorkStatus ||
+      !sessionActive ||
+      !subagentRpcAvailable ||
+      fleetRequestInFlight
+    ) {
+      return;
+    }
+
+    fleetRequestInFlight = true;
+    try {
+      const data = await requestSubagentRpc("status", generation);
+      if (!sessionActive || generation !== sessionGeneration) return;
+      const next = parseFleetSummary(data);
+      if (next) {
+        fleetSummary = next;
+        fleetUpdatedAt = Date.now();
+        fleetConsecutiveFailures = 0;
+      } else {
+        fleetConsecutiveFailures += 1;
+        if (
+          fleetSummary &&
+          Date.now() - fleetUpdatedAt >= FLEET_STALE_AFTER_MS
+        ) {
+          fleetSummary = null;
+          fleetUpdatedAt = 0;
+        }
+        if (fleetConsecutiveFailures <= MAX_FLEET_REFRESH_RETRIES) {
+          scheduleFleetRefresh(fleetConsecutiveFailures * 500);
+        }
+      }
+    } finally {
+      fleetRequestInFlight = false;
+      if (sessionActive && generation === sessionGeneration) {
+        syncWorkTimers();
+        tuiRef?.requestRender();
+      }
+    }
+  }
+
+  function scheduleFleetRefresh(delay = 0): void {
+    if (!showWorkStatus || !sessionActive || !subagentRpcAvailable) return;
+    const generation = sessionGeneration;
+    const timer = setTimeout(() => refreshFleetStatus(generation), delay);
+    timer.unref?.();
+  }
+
+  function resetWorkStatus(): void {
+    activeTools.clear();
+    fleetSummary = null;
+    fleetUpdatedAt = 0;
+    fleetConsecutiveFailures = 0;
+    fleetRequestInFlight = false;
+    stopWorkTimers();
+    tuiRef?.requestRender();
+  }
+
   function refreshGitFooter(): void {
     if (refreshGitCache()) tuiRef?.requestRender();
   }
@@ -1539,13 +1888,50 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const eventDisposers = [
+    pi.events.on(SUBAGENT_RPC_READY_EVENT, () => {
+      if (sessionActive) probeSubagentRpc();
+    }),
+    pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, () => scheduleFleetRefresh()),
+    pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, () => scheduleFleetRefresh()),
+  ].filter((dispose): dispose is () => void => typeof dispose === "function");
+
+  pi.on("tool_execution_start", (event) => {
+    if (!showWorkStatus || !sessionActive) return;
+    activeTools.set(event.toolCallId, {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      startedAt: Date.now(),
+    });
+    syncWorkTimers();
+    tuiRef?.requestRender();
+    if (SUBAGENT_TOOL_NAMES.has(event.toolName)) scheduleFleetRefresh(100);
+  });
+
+  pi.on("tool_execution_update", (event) => {
+    if (SUBAGENT_TOOL_NAMES.has(event.toolName)) scheduleFleetRefresh();
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    if (!showWorkStatus) return;
+    activeTools.delete(event.toolCallId);
+    syncWorkTimers();
+    tuiRef?.requestRender();
+    if (SUBAGENT_TOOL_NAMES.has(event.toolName)) scheduleFleetRefresh();
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     refreshGitCache();
+    sessionGeneration += 1;
+    sessionActive = true;
+    subagentRpcAvailable = false;
+    resetWorkStatus();
 
     if (!ctx.hasUI) return;
 
     ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
       tuiRef = tui;
+      footerAttached = true;
 
       const unsub = footerData.onBranchChange(() => {
         refreshGitFooter();
@@ -1561,8 +1947,10 @@ export default function (pi: ExtensionAPI) {
       return {
         dispose: () => {
           unsub();
+          footerAttached = false;
           tuiRef = null;
           stopRefreshTimer();
+          stopWorkTimers();
         },
         invalidate() {},
         render(width: number): string[] {
@@ -1647,18 +2035,37 @@ export default function (pi: ExtensionAPI) {
           ]
             .filter(Boolean)
             .join(sep);
-          const contextIcon = theme.fg("text", "▸");
+          const contextIcon = progressColor(percentage, "◐", theme);
           const secondLine = [`${contextIcon} ${contextBlock}`, weeklyUsage]
             .filter(Boolean)
             .join(sep);
 
-          return [
+          const lines = [
             truncateToWidth(`${NORMAL_INTENSITY} ${firstLine}`, width),
             truncateToWidth(`${NORMAL_INTENSITY} ${secondLine}`, width),
           ];
+          if (showWorkStatus) {
+            const workStatus =
+              width > 1 ? renderWorkStatus(width - 1, theme) : "";
+            lines.push(
+              workStatus
+                ? truncateToWidth(`${NORMAL_INTENSITY} ${workStatus}`, width)
+                : "",
+            );
+          }
+          return lines;
         },
       };
     });
+
+    probeSubagentRpc(sessionGeneration);
+  });
+
+  pi.on("session_shutdown", () => {
+    sessionGeneration += 1;
+    sessionActive = false;
+    resetWorkStatus();
+    for (const dispose of eventDisposers.splice(0)) dispose();
   });
 
   pi.on("turn_end", async () => {
