@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3
 
 - Keep terminal tab titles synchronized as `pi · <session>`, with the project name as fallback.
 - Document the VS Code `${sequence}` tab-title setting.
