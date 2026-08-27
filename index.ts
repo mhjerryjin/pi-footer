@@ -58,9 +58,17 @@ interface ActiveToolStatus {
 }
 
 interface SubagentFleetSummary {
-  totalActive: number;
+  activeAgents: number;
+  totalAgents: number;
+  agentLabels: string[];
   backgroundUsed: number;
   backgroundLimit: number;
+}
+
+interface AsyncAgentProgress {
+  active: number;
+  total: number;
+  labels: string[];
 }
 
 interface SubagentRpcReply {
@@ -1690,13 +1698,31 @@ export default function (pi: ExtensionAPI) {
       compact.push(theme.fg("text", `tasks ${tools.length}`));
     }
 
-    const agents = fleetSummary?.totalActive ?? 0;
-    if (agents > 0) {
+    const activeAgents = fleetSummary?.activeAgents ?? 0;
+    const totalAgents = fleetSummary?.totalAgents ?? 0;
+    if (totalAgents > 0) {
+      const progress = `${activeAgents}/${totalAgents}`;
+      const labelCounts = new Map<string, number>();
+      for (const label of fleetSummary?.agentLabels ?? []) {
+        labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+      }
+      const labels = [...labelCounts.entries()]
+        .slice(0, 3)
+        .map(([label, count]) => `${label}${count > 1 ? ` ×${count}` : ""}`)
+        .join(", ");
+      const running =
+        labels && activeAgents > 0
+          ? theme.fg(
+              "dim",
+              ` · ${labels}${activeAgents === 1 ? " running" : ""}`,
+            )
+          : "";
       segments.push(
         theme.fg("text", "agents: ") +
-          progressColor(0, String(agents), theme),
+          progressColor(0, progress, theme) +
+          running,
       );
-      compact.push(theme.fg("text", `agents ${agents}`));
+      compact.push(theme.fg("text", `agents ${progress}`));
     }
 
     const backgroundUsed = fleetSummary?.backgroundUsed ?? 0;
@@ -1728,6 +1754,85 @@ export default function (pi: ExtensionAPI) {
       : null;
   }
 
+  function publicAgentLabel(value: unknown): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const label = sanitizeFooterText(value).trim().slice(0, 48);
+    return label || undefined;
+  }
+
+  function parseFleetLabels(record: Record<string, unknown>): string[] {
+    if (!Array.isArray(record.entries)) return [];
+    return record.entries
+      .slice(0, 16)
+      .map((entry) =>
+        entry && typeof entry === "object" && !Array.isArray(entry)
+          ? publicAgentLabel((entry as Record<string, unknown>).agent)
+          : undefined,
+      )
+      .filter((label): label is string => Boolean(label));
+  }
+
+  function parseAsyncAgentProgress(value: unknown): AsyncAgentProgress | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const snapshot = value as Record<string, unknown>;
+    if (
+      snapshot.kind !== "pi-subagents.async-status-snapshot" ||
+      snapshot.version !== 1 ||
+      !Array.isArray(snapshot.runs)
+    ) {
+      return null;
+    }
+
+    let active = 0;
+    let total = 0;
+    let visited = 0;
+    let hasActiveRun = false;
+    const labels: string[] = [];
+    const isActive = (state: unknown) => state === "queued" || state === "running";
+
+    const collectLeaves = (node: unknown, depth: number): void => {
+      if (
+        visited >= 64 ||
+        depth > 4 ||
+        !node ||
+        typeof node !== "object" ||
+        Array.isArray(node)
+      ) {
+        return;
+      }
+      visited += 1;
+      const record = node as Record<string, unknown>;
+      const children = Array.isArray(record.children)
+        ? record.children.slice(0, 8)
+        : [];
+      if (children.length > 0 && depth < 4) {
+        for (const child of children) collectLeaves(child, depth + 1);
+        return;
+      }
+
+      total += 1;
+      if (!isActive(record.state)) return;
+      active += 1;
+      const label = publicAgentLabel(record.label);
+      if (label) labels.push(label);
+    };
+
+    for (const run of snapshot.runs.slice(0, 20)) {
+      if (
+        !run ||
+        typeof run !== "object" ||
+        Array.isArray(run) ||
+        !isActive((run as Record<string, unknown>).state)
+      ) {
+        continue;
+      }
+      hasActiveRun = true;
+      collectLeaves(run, 0);
+    }
+
+    return hasActiveRun ? { active, total, labels } : null;
+  }
+
   function parseFleetSummary(value: unknown): SubagentFleetSummary | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const data = value as Record<string, unknown>;
@@ -1736,14 +1841,22 @@ export default function (pi: ExtensionAPI) {
     const record = fleet as Record<string, unknown>;
     if (record.version !== 1) return null;
 
-    const totalActive = nonNegativeInteger(record.totalActive);
-    if (totalActive === null) return null;
+    const fleetActive = nonNegativeInteger(record.totalActive);
+    if (fleetActive === null) return null;
+    const asyncProgress = parseAsyncAgentProgress(data.asyncSnapshot);
+    const fleetLabels = parseFleetLabels(record);
 
     // Fleet Status v1 originally omitted capacity. Treat it as zero so older
     // pi-subagents releases still provide the active child count.
     const capacity = record.topLevelAsyncCapacity;
     if (capacity === undefined) {
-      return { totalActive, backgroundUsed: 0, backgroundLimit: 0 };
+      return {
+        activeAgents: asyncProgress?.active ?? fleetActive,
+        totalAgents: asyncProgress?.total ?? fleetActive,
+        agentLabels: asyncProgress?.labels ?? fleetLabels,
+        backgroundUsed: 0,
+        backgroundLimit: 0,
+      };
     }
     if (
       !capacity ||
@@ -1758,7 +1871,13 @@ export default function (pi: ExtensionAPI) {
     const backgroundLimit = nonNegativeInteger(capacityRecord.limit);
     if (backgroundUsed === null || backgroundLimit === null) return null;
 
-    return { totalActive, backgroundUsed, backgroundLimit };
+    return {
+      activeAgents: asyncProgress?.active ?? fleetActive,
+      totalAgents: asyncProgress?.total ?? fleetActive,
+      agentLabels: asyncProgress?.labels ?? fleetLabels,
+      backgroundUsed,
+      backgroundLimit,
+    };
   }
 
   function stopWorkTimers(): void {
@@ -1780,7 +1899,7 @@ export default function (pi: ExtensionAPI) {
 
     const hasWork =
       activeMainTools().length > 0 ||
-      (fleetSummary?.totalActive ?? 0) > 0 ||
+      (fleetSummary?.totalAgents ?? 0) > 0 ||
       (fleetSummary?.backgroundUsed ?? 0) > 0;
 
     if (hasWork && !workRenderTimer) {
@@ -1793,7 +1912,7 @@ export default function (pi: ExtensionAPI) {
 
     const hasSubagentWork =
       subagentRpcAvailable &&
-      ((fleetSummary?.totalActive ?? 0) > 0 ||
+      ((fleetSummary?.totalAgents ?? 0) > 0 ||
         (fleetSummary?.backgroundUsed ?? 0) > 0);
     if (hasSubagentWork && !fleetRefreshTimer) {
       fleetRefreshTimer = setInterval(() => refreshFleetStatus(), 2000);

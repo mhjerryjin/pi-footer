@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- Show subagent progress as active/total with grouped active-agent labels.
+- Prefer the versioned async status snapshot so completed workflow steps no longer inflate the active count.
+
 ## 0.1.4
 
 - Fix terminal titles being overwritten by Pi's built-in title update after session startup, reload, or rename.

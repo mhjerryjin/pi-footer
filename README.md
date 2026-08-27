@@ -67,11 +67,11 @@ While work is active, a compact third row appears automatically:
 ```text
 ● model: gpt-5.6-sol │ effort: high │ git: main
 ◐ context ■■■□□□□□□□ 31% │ weekly ■■■□□□□□□□ 34%
-↳ task: bash · 12s │ agents: 2 │ bg: 1/4
+↳ task: bash · 12s │ agents: 1/2 · reviewer running │ bg: 1/4
 ```
 
 - `task`/`tasks` tracks tools currently running in the parent Pi session.
-- `agents` is the active child count reported by `pi-subagents` Fleet Status RPC.
+- `agents` shows active/total child progress plus active agent labels from the versioned `pi-subagents` async snapshot, falling back to Fleet counts for older releases.
 - `bg` is active top-level asynchronous subagent work and its configured capacity.
 - The row stays reserved but blank while idle, preventing the editor and footer from jumping when work starts or stops.
 

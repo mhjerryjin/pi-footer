@@ -9,6 +9,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
   const bus = new Map<string, Handler[]>();
   let footerFactory: any;
   const titles: string[] = [];
+  let asyncSnapshot: any;
   let fleet: any = {
     version: 1,
     entries: [],
@@ -34,7 +35,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
         const response =
           data.method === "ping"
             ? { capabilities: { fleetStatus: { version: 1 } } }
-            : { fleet };
+            : { fleet, ...(asyncSnapshot ? { asyncSnapshot } : {}) };
         queueMicrotask(() => {
           events.emit(`subagents:rpc:v1:reply:${data.requestId}`, {
             version: 1,
@@ -92,6 +93,9 @@ function createHarness(options: { rpc?: boolean } = {}) {
     setFleet(value: any) {
       fleet = value;
     },
+    setAsyncSnapshot(value: any) {
+      asyncSnapshot = value;
+    },
     async start() {
       await emitHook("session_start", {});
       // Pi core restores its built-in title after extension session_start.
@@ -127,10 +131,29 @@ test("work row stays reserved and summarizes tools plus Fleet counts", async () 
 
   harness.setFleet({
     version: 1,
-    entries: [],
+    entries: [{ agent: "reviewer" }, { agent: "reviewer" }],
     totalActive: 2,
     topLevelAsyncCapacity: { used: 1, limit: 4 },
     omitted: 0,
+  });
+  harness.setAsyncSnapshot({
+    kind: "pi-subagents.async-status-snapshot",
+    version: 1,
+    generatedAt: Date.now(),
+    caps: {},
+    omitted: {},
+    runs: [
+      {
+        id: "run-1",
+        kind: "subagent",
+        label: "reviewer ×2",
+        state: "running",
+        children: [
+          { id: "step-1", kind: "step", label: "reviewer", state: "complete" },
+          { id: "step-2", kind: "step", label: "reviewer", state: "running" },
+        ],
+      },
+    ],
   });
   harness.events.emit("subagent:async-started", {});
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -142,7 +165,8 @@ test("work row stays reserved and summarizes tools plus Fleet counts", async () 
   });
   const active = render();
   assert.match(active[2], /task: bash/);
-  assert.match(active[2], /agents: 2/);
+  assert.match(active[2], /agents: 1\/2/);
+  assert.match(active[2], /reviewer running/);
   assert.match(active[2], /bg: 1\/4/);
   assert.equal(render(1).length, 3);
   assert.ok(render(8).every((line: string) => line.length <= 8));
