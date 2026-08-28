@@ -8,7 +8,10 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildSessionContext } from "@earendil-works/pi-coding-agent";
+import {
+  buildSessionContext,
+  estimateTokens,
+} from "@earendil-works/pi-coding-agent";
 import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { execSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -1492,7 +1495,11 @@ export default function (pi: ExtensionAPI) {
     theme: any,
     used?: number,
     total?: number,
-    options?: { barWidth?: number; includeCounts?: boolean },
+    options?: {
+      barWidth?: number;
+      includeCounts?: boolean;
+      estimated?: boolean;
+    },
   ): string {
     const barWidth = Math.max(4, options?.barWidth ?? CTX_GAUGE_WIDTH);
     const clamped = Math.max(0, Math.min(100, percentage));
@@ -1502,11 +1509,12 @@ export default function (pi: ExtensionAPI) {
     const bar =
       progressColor(clamped, BAR_FILLED.repeat(filled), theme) +
       theme.fg("borderMuted", BAR_EMPTY.repeat(empty));
-    const pct = `${Math.round(clamped)}%`;
+    const estimatePrefix = options?.estimated ? "~" : "";
+    const pct = `${estimatePrefix}${Math.round(clamped)}%`;
     const counts =
       options?.includeCounts === false || used === undefined || !total
         ? ""
-        : ` (${formatTokenCount(used)}/${formatTokenCount(total)})`;
+        : ` (${estimatePrefix}${formatTokenCount(used)}/${formatTokenCount(total)})`;
 
     return `${theme.fg("text", "context")} ${bar} ${progressColor(clamped, pct, theme)}${theme.fg("dim", counts)}`;
   }
@@ -1578,19 +1586,52 @@ export default function (pi: ExtensionAPI) {
     percentage: number;
     used: number;
     total: number;
+    estimated: boolean;
   } {
     const entries = ctx.sessionManager.getEntries();
     const leafId = ctx.sessionManager.getLeafId();
     const context = buildSessionContext(entries, leafId);
-    const contextWindow = ctx.model?.contextWindow ?? 0;
+    const reported = ctx.getContextUsage?.();
+    const contextWindow =
+      reported?.contextWindow ?? ctx.model?.contextWindow ?? 0;
     const base = {
       thinkingLevel: context.thinkingLevel || "off",
       percentage: 0,
       used: 0,
       total: contextWindow,
+      estimated: false,
     };
     if (contextWindow === 0) return base;
 
+    if (typeof reported?.tokens === "number") {
+      return {
+        ...base,
+        percentage:
+          typeof reported.percent === "number"
+            ? reported.percent
+            : (reported.tokens / contextWindow) * 100,
+        used: reported.tokens,
+      };
+    }
+
+    // Pi intentionally reports unknown usage immediately after compaction,
+    // because no provider response has measured the compacted context yet.
+    // Sum the compacted context with Pi's conservative chars/4 estimator and
+    // mark it with `~`; the next assistant usage replaces it automatically.
+    if (reported?.tokens === null) {
+      const estimatedTokens = context.messages.reduce(
+        (total: number, message: any) => total + estimateTokens(message),
+        0,
+      );
+      return {
+        ...base,
+        percentage: (estimatedTokens / contextWindow) * 100,
+        used: estimatedTokens,
+        estimated: true,
+      };
+    }
+
+    // Compatibility fallback for older Pi versions without getContextUsage().
     const lastAssistant = context.messages
       .slice()
       .reverse()
@@ -1607,10 +1648,9 @@ export default function (pi: ExtensionAPI) {
       (usage.cacheRead ?? 0) +
       (usage.cacheWrite ?? 0);
     return {
-      thinkingLevel: base.thinkingLevel,
+      ...base,
       percentage: (contextTokens / contextWindow) * 100,
       used: contextTokens,
-      total: contextWindow,
     };
   }
 
@@ -2220,6 +2260,7 @@ export default function (pi: ExtensionAPI) {
             percentage,
             used: ctxUsed,
             total: ctxTotal,
+            estimated: contextEstimated,
           } = getSessionFooterState(ctx);
 
           // Build parts for status line
@@ -2266,18 +2307,22 @@ export default function (pi: ExtensionAPI) {
             renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
               barWidth: CTX_GAUGE_WIDTH,
               includeCounts: true,
+              estimated: contextEstimated,
             }),
             renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
               barWidth: 8,
               includeCounts: false,
+              estimated: contextEstimated,
             }),
             renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
               barWidth: 6,
               includeCounts: false,
+              estimated: contextEstimated,
             }),
             renderContextGauge(percentage, theme, ctxUsed, ctxTotal, {
               barWidth: 4,
               includeCounts: false,
+              estimated: contextEstimated,
             }),
           ]);
           const providerUsage = latestUsage
@@ -2332,6 +2377,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_end", async () => {
     refreshGitFooter();
+  });
+
+  pi.on("session_compact", () => {
+    tuiRef?.requestRender();
   });
 
   pi.on("session_info_changed", (event, ctx) => {

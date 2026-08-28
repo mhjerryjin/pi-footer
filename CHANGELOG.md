@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6
+
+- Show an immediate `~` local context estimate after compaction, then replace it with provider-measured usage on the next response.
+
 ## 0.1.5
 
 - Show subagent progress as active/total with grouped active-agent labels.

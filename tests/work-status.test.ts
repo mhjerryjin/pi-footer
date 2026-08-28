@@ -9,6 +9,8 @@ function createHarness(options: { rpc?: boolean } = {}) {
   const bus = new Map<string, Handler[]>();
   let footerFactory: any;
   const titles: string[] = [];
+  let entries: any[] = [];
+  let contextUsage: any;
   let asyncSnapshot: any;
   let fleet: any = {
     version: 1,
@@ -66,11 +68,12 @@ function createHarness(options: { rpc?: boolean } = {}) {
     cwd: "/tmp/project",
     model: undefined,
     sessionManager: {
-      getEntries: () => [],
-      getLeafId: () => null,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id ?? null,
       getSessionId: () => "session-1",
       getSessionFile: () => null,
     },
+    getContextUsage: () => contextUsage,
     ui: {
       setFooter(factory: any) {
         footerFactory = factory;
@@ -90,6 +93,12 @@ function createHarness(options: { rpc?: boolean } = {}) {
     events,
     emitHook,
     titles,
+    setEntries(value: any[]) {
+      entries = value;
+    },
+    setContextUsage(value: any) {
+      contextUsage = value;
+    },
     setFleet(value: any) {
       fleet = value;
     },
@@ -190,6 +199,33 @@ test("capacity-less Fleet v1 remains compatible", async () => {
 
   assert.match(render()[2], /agents: 3/);
   assert.doesNotMatch(render()[2], /bg:/);
+  await harness.emitHook("session_shutdown", {});
+  footer.dispose();
+});
+
+test("compaction shows a local estimate until provider usage is available", async () => {
+  const harness = createHarness({ rpc: false });
+  harness.setEntries([
+    {
+      type: "message",
+      id: "message-1",
+      parentId: null,
+      timestamp: Date.now(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "x".repeat(400) }],
+        timestamp: Date.now(),
+      },
+    },
+  ]);
+  harness.setContextUsage({ tokens: null, contextWindow: 1000, percent: null });
+  const { footer, render } = await harness.start();
+  assert.match(render()[1], /~10%/);
+  assert.match(render()[1], /\(~100\/1k\)/);
+
+  harness.setContextUsage({ tokens: 200, contextWindow: 1000, percent: 20 });
+  assert.match(render()[1], / 20%/);
+  assert.doesNotMatch(render()[1], /~20%/);
   await harness.emitHook("session_shutdown", {});
   footer.dispose();
 });

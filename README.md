@@ -77,6 +77,16 @@ While work is active, a compact third row appears automatically:
 
 The `pi-subagents` integration is optional and uses its versioned in-process event-bus API, so `pi-footer` has no hard dependency on that package. FleetView remains responsible for per-agent details and controls such as inspect, stop, and steer.
 
+## Context refresh after compaction
+
+Immediately after `/compact`, Pi has no provider-measured token count for the new compacted context. The footer displays a conservative local estimate marked with `~`:
+
+```text
+◐ context ■■□□□□□□□□ ~14% (~154k/1.1M)
+```
+
+The next assistant response supplies authoritative usage and automatically replaces the estimate without `~`.
+
 ## Configuration
 
 All environment variables are optional:
