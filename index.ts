@@ -137,6 +137,71 @@ export function buildTerminalTitle(
   return `pi · ${safeSession || safeProject}`.slice(0, 120);
 }
 
+export function isFastServiceTierPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+
+  const request = payload as Record<string, unknown>;
+  const serviceTier = request.service_tier ?? request.serviceTier;
+  if (typeof serviceTier !== "string") return false;
+
+  const normalized = serviceTier.trim().toLowerCase();
+  return normalized === "fast" || normalized === "priority";
+}
+
+const FAST_SERVICE_TIER_APIS = {
+  openai: "openai-responses",
+  "openai-codex": "openai-codex-responses",
+  anthropic: "anthropic-messages",
+  google: "google-generative-ai",
+  "google-vertex": "google-vertex",
+} as const;
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function resolveFastServiceTierState(
+  model: unknown,
+  defaults: unknown,
+  branch: readonly unknown[],
+): boolean {
+  const modelRecord = recordValue(model);
+  const provider = modelRecord?.provider;
+  const api = modelRecord?.api;
+  if (
+    typeof provider !== "string" ||
+    !(provider in FAST_SERVICE_TIER_APIS) ||
+    api !== FAST_SERVICE_TIER_APIS[
+      provider as keyof typeof FAST_SERVICE_TIER_APIS
+    ]
+  ) {
+    return false;
+  }
+
+  let overrides: Record<string, unknown> | undefined;
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = recordValue(branch[index]);
+    if (entry?.type !== "custom" || entry.customType !== "pi-service-tier") {
+      continue;
+    }
+    const data = recordValue(entry.data);
+    if (data?.version !== 1) continue;
+    overrides = recordValue(data.overrides);
+    if (overrides) break;
+  }
+
+  const defaultRecord = recordValue(defaults) ?? {};
+  const tier =
+    overrides && Object.prototype.hasOwnProperty.call(overrides, provider)
+      ? overrides[provider]
+      : defaultRecord[provider];
+  return tier === "priority";
+}
+
 // ============ Git Cache ============
 
 let gitCache: GitCache | null = null;
@@ -1658,6 +1723,8 @@ export default function (pi: ExtensionAPI) {
   let latestUsage: UsageSnapshot | null = null;
   let activeProvider: string | null = null; // internal provider key for the current model
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let fastModeActive = false;
+  let activeContext: any | null = null;
 
   // Store tui reference for triggering re-renders from event handlers
   let tuiRef: { requestRender: () => void } | null = null;
@@ -2184,7 +2251,41 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  const loadServiceTierDefaults = (): unknown => {
+    const configPath = join(homedir(), ".pi", "agent", "service-tier.json");
+    try {
+      return existsSync(configPath)
+        ? JSON.parse(readFileSync(configPath, "utf8"))
+        : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const refreshFastMode = (ctx: any): void => {
+    const branch = ctx.sessionManager.getBranch?.() ?? [];
+    const nextFastMode = resolveFastServiceTierState(
+      ctx.model,
+      loadServiceTierDefaults(),
+      branch,
+    );
+    if (fastModeActive === nextFastMode) return;
+    fastModeActive = nextFastMode;
+    tuiRef?.requestRender();
+  };
+
   const eventDisposers = [
+    pi.events.on("pi-fancy-footer:widget", (message) => {
+      const record = recordValue(message);
+      const widget = recordValue(record?.widget);
+      const isServiceTierUpdate =
+        record?.protocol === 1 &&
+        ((record.type === "upsert" &&
+          widget?.id === "pi-service-tier.service-tier") ||
+          (record.type === "remove" &&
+            record.id === "pi-service-tier.service-tier"));
+      if (isServiceTierUpdate && activeContext) refreshFastMode(activeContext);
+    }),
     pi.events.on(SUBAGENT_RPC_READY_EVENT, () => {
       if (sessionActive) probeSubagentRpc();
     }),
@@ -2220,7 +2321,9 @@ export default function (pi: ExtensionAPI) {
     refreshGitCache();
     sessionGeneration += 1;
     sessionActive = true;
+    activeContext = ctx;
     subagentRpcAvailable = false;
+    refreshFastMode(ctx);
     resetWorkStatus();
 
     if (!ctx.hasUI) return;
@@ -2285,9 +2388,12 @@ export default function (pi: ExtensionAPI) {
             `${statusIcon} ` +
             theme.fg("text", "model: ") +
             headerColor("model", modelName, theme);
+          const effortValue = fastModeActive
+            ? `${thinkingLevel} fast`
+            : thinkingLevel;
           const effortBlock =
             theme.fg("text", "effort: ") +
-            headerColor("thinking", thinkingLevel, theme);
+            headerColor("thinking", effortValue, theme);
 
           const sep = theme.fg("text", " │ ");
 
@@ -2367,6 +2473,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     sessionGeneration += 1;
     sessionActive = false;
+    activeContext = null;
+    fastModeActive = false;
     if (terminalTitleTimer) {
       clearTimeout(terminalTitleTimer);
       terminalTitleTimer = null;
@@ -2388,8 +2496,21 @@ export default function (pi: ExtensionAPI) {
     tuiRef?.requestRender();
   });
 
+  pi.on("session_tree", (_event, ctx) => {
+    activeContext = ctx;
+    refreshFastMode(ctx);
+  });
+
+  pi.on("before_provider_request", (event) => {
+    if (!isFastServiceTierPayload(event.payload) || fastModeActive) return;
+    fastModeActive = true;
+    tuiRef?.requestRender();
+  });
+
   // Refresh when model changes — fetch immediately, restart timer
-  pi.on("model_select", (event, _ctx) => {
+  pi.on("model_select", (event, ctx) => {
+    activeContext = ctx;
+    refreshFastMode(ctx);
     if (!event.model?.provider) return;
     fetchUsage(event.model.provider);
     startRefreshTimer(); // reset the 5min countdown since we just fetched

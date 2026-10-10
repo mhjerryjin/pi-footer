@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- Show `fast` after the effort level by following `pi-service-tier` global defaults and branch-aware session overrides for supported models.
+
 ## 0.1.6
 
 - Show an immediate `~` local context estimate after compaction, then replace it with provider-measured usage on the next response.

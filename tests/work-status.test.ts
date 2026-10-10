@@ -66,9 +66,10 @@ function createHarness(options: { rpc?: boolean } = {}) {
   const context = {
     hasUI: true,
     cwd: "/tmp/project",
-    model: undefined,
+    model: undefined as any,
     sessionManager: {
       getEntries: () => entries,
+      getBranch: () => entries,
       getLeafId: () => entries.at(-1)?.id ?? null,
       getSessionId: () => "session-1",
       getSessionFile: () => null,
@@ -246,6 +247,56 @@ test("subagent tools fall back to task display when Fleet RPC is absent", async 
     result: {},
     isError: false,
   });
+  await harness.emitHook("session_shutdown", {});
+  footer.dispose();
+});
+
+test("fast mode follows pi-service-tier session state", async () => {
+  const harness = createHarness({ rpc: false });
+  harness.context.model = {
+    provider: "openai-codex",
+    api: "openai-codex-responses",
+    id: "gpt-test",
+  };
+  harness.setEntries([
+    {
+      type: "custom",
+      customType: "pi-service-tier",
+      data: { version: 1, overrides: { "openai-codex": "" } },
+    },
+  ]);
+  const { footer, render } = await harness.start();
+
+  assert.doesNotMatch(render()[0], /effort: off fast/);
+
+  harness.setEntries([
+    {
+      type: "custom",
+      customType: "pi-service-tier",
+      data: { version: 1, overrides: { "openai-codex": "priority" } },
+    },
+  ]);
+  harness.events.emit("pi-fancy-footer:widget", {
+    protocol: 1,
+    type: "upsert",
+    widget: { id: "pi-service-tier.service-tier" },
+  });
+  assert.match(render()[0], /effort: off fast/);
+
+  harness.setEntries([
+    {
+      type: "custom",
+      customType: "pi-service-tier",
+      data: { version: 1, overrides: { "openai-codex": "" } },
+    },
+  ]);
+  harness.events.emit("pi-fancy-footer:widget", {
+    protocol: 1,
+    type: "upsert",
+    widget: { id: "pi-service-tier.service-tier" },
+  });
+  assert.doesNotMatch(render()[0], /effort: off fast/);
+
   await harness.emitHook("session_shutdown", {});
   footer.dispose();
 });

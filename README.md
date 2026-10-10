@@ -9,7 +9,7 @@ A compact footer for [Pi](https://github.com/earendil-works/pi) with two core st
 ## Features
 
 - Two aligned, background-free core rows plus a stable work-status row
-- Model, thinking level, working directory, Git branch, and `/name` session display
+- Model, thinking level, optional active `fast` service-tier indicator, working directory, Git branch, and `/name` session display
 - Git dirty state plus ahead/behind counts
 - Context usage with token counts
 - Provider quota lookup with reset countdowns
@@ -51,6 +51,14 @@ pi · feature-work
 ```
 
 Without an explicit session name, the title falls back to the current project, for example `pi · pi-footer`.
+
+When Pi sends a supported provider request with the `fast` or `priority` service tier enabled, the effort section uses the same thinking-level color and becomes:
+
+```text
+effort: high fast
+```
+
+The `fast` suffix follows `pi-service-tier` global defaults and branch-aware session overrides immediately. It is hidden when Fast is off or the current provider/API pair does not support service tiers.
 
 Most terminal emulators honor the title sequence automatically. VS Code defaults to the foreground process name (`node`); set this in VS Code User Settings to display the title sent by Pi:
 
