@@ -150,6 +150,23 @@ export function isFastServiceTierPayload(payload: unknown): boolean {
   return normalized === "fast" || normalized === "priority";
 }
 
+export function resolveCodexSpeedLabel(
+  model: { provider?: string; id?: string } | undefined,
+  status: string | undefined,
+): "fast" | "ultrafast" | "" {
+  if (!model || !["openai", "openai-codex"].includes(model.provider ?? "")) return "";
+  const label = (status ?? "").replace(/\u001b\[[0-9;]*m/g, "").trim().toLowerCase();
+  const fastModels = [
+    "gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol",
+  ];
+  const ultrafastModels = ["gpt-6-astra", "gpt-6.1-sol"];
+  if (model.provider === "openai") ultrafastModels.push("gpt-5.6-sol");
+  if (label === "ultrafast" && ultrafastModels.includes(model.id ?? "")) return "ultrafast";
+  if (label === "fast" && fastModels.includes(model.id ?? "")) return "fast";
+  return "";
+}
+
 const FAST_SERVICE_TIER_APIS = {
   openai: "openai-responses",
   "openai-codex": "openai-codex-responses",
@@ -2388,8 +2405,14 @@ export default function (pi: ExtensionAPI) {
             `${statusIcon} ` +
             theme.fg("text", "model: ") +
             headerColor("model", modelName, theme);
-          const effortValue = fastModeActive
-            ? `${thinkingLevel} fast`
+          const extensionStatuses = footerData.getExtensionStatuses?.();
+          const codexSpeedStatus = extensionStatuses?.get("fast-priority");
+          // A present status belongs to pi-codex-fast, including enabled-but-inactive modes.
+          const speedLabel = codexSpeedStatus !== undefined
+            ? resolveCodexSpeedLabel(ctx.model, codexSpeedStatus)
+            : fastModeActive ? "fast" : "";
+          const effortValue = speedLabel
+            ? `${thinkingLevel} ${speedLabel}`
             : thinkingLevel;
           const effortBlock =
             theme.fg("text", "effort: ") +

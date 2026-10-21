@@ -60,6 +60,8 @@ effort: high fast
 
 The `fast` suffix follows `pi-service-tier` global defaults and branch-aware session overrides immediately. It is hidden when Fast is off or the current provider/API pair does not support service tiers.
 
+With `@calesennett/pi-codex-fast`, the footer reads the live `fast-priority` status and displays `effort: high fast` or `effort: high ultrafast` in the effort color. `/codex-fast` and `/codex-ultrafast` changes appear without sending a request. Unsupported models hide the suffix even when the speed extension is enabled. Model support follows the installed adapter's current allowlist (including `openai-codex/gpt-6.1-sol` for Ultrafast).
+
 Most terminal emulators honor the title sequence automatically. VS Code defaults to the foreground process name (`node`); set this in VS Code User Settings to display the title sent by Pi:
 
 ```json

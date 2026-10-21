@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8
+
+- Display live `fast` / `ultrafast` status from `@calesennett/pi-codex-fast` in the effort color, hiding inactive modes on unsupported models.
+- Add speed-label and live footer regression tests.
+
 ## 0.1.7
 
 - Show `fast` after the effort level by following `pi-service-tier` global defaults and branch-aware session overrides for supported models.

@@ -6,6 +6,7 @@ import {
   isFastServiceTierPayload,
   resolveCommandCodeCredential,
   resolveFastServiceTierState,
+  resolveCodexSpeedLabel,
   sanitizeFooterText,
 } from "../index.ts";
 
@@ -108,6 +109,17 @@ test("fast mode resolves pi-service-tier defaults and session overrides", () => 
     ),
     false,
   );
+});
+
+test("Codex speed labels follow runtime status and supported models", () => {
+  const model = { provider: "openai-codex", id: "gpt-6.1-sol" };
+  assert.equal(resolveCodexSpeedLabel(model, "\u001b[36mUltrafast\u001b[39m"), "ultrafast");
+  assert.equal(resolveCodexSpeedLabel(model, "Fast"), "fast");
+  assert.equal(resolveCodexSpeedLabel(model, undefined), "");
+  assert.equal(resolveCodexSpeedLabel(model, "off"), "");
+  assert.equal(resolveCodexSpeedLabel({ ...model, id: "gpt-5.6-sol" }, "Ultrafast"), "");
+  assert.equal(resolveCodexSpeedLabel({ provider: "openai", id: "gpt-5.6-sol" }, "Ultrafast"), "ultrafast");
+  assert.equal(resolveCodexSpeedLabel({ ...model, provider: "ollama" }, "Fast"), "");
 });
 
 test("home abbreviation requires a path boundary", () => {

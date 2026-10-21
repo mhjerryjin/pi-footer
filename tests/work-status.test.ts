@@ -9,6 +9,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
   const bus = new Map<string, Handler[]>();
   let footerFactory: any;
   const titles: string[] = [];
+  const extensionStatuses = new Map<string, string>();
   let entries: any[] = [];
   let contextUsage: any;
   let asyncSnapshot: any;
@@ -94,6 +95,7 @@ function createHarness(options: { rpc?: boolean } = {}) {
     events,
     emitHook,
     titles,
+    extensionStatuses,
     setEntries(value: any[]) {
       entries = value;
     },
@@ -117,7 +119,10 @@ function createHarness(options: { rpc?: boolean } = {}) {
           fg: (_name: string, text: string) => text,
           getColorMode: () => "truecolor",
         },
-        { onBranchChange: () => () => {} },
+        {
+          onBranchChange: () => () => {},
+          getExtensionStatuses: () => extensionStatuses,
+        },
       );
       const render = (width = 120) =>
         footer
@@ -247,6 +252,23 @@ test("subagent tools fall back to task display when Fleet RPC is absent", async 
     result: {},
     isError: false,
   });
+  await harness.emitHook("session_shutdown", {});
+  footer.dispose();
+});
+
+test("Codex speed status updates the effort label immediately", async () => {
+  const harness = createHarness({ rpc: false });
+  harness.context.model = { provider: "openai-codex", id: "gpt-6.1-sol" };
+  const { footer, render } = await harness.start();
+  harness.extensionStatuses.set("fast-priority", "\u001b[36mUltrafast\u001b[39m");
+  assert.match(render()[0], /effort: off ultrafast/);
+  harness.extensionStatuses.set("fast-priority", "Fast");
+  assert.match(render()[0], /effort: off fast/);
+  harness.extensionStatuses.delete("fast-priority");
+  assert.doesNotMatch(render()[0], /effort: off (?:ultra)?fast/);
+  harness.context.model = { provider: "openai-codex", id: "gpt-5.6-sol" };
+  harness.extensionStatuses.set("fast-priority", "Ultrafast");
+  assert.doesNotMatch(render()[0], /effort: off (?:ultra)?fast/);
   await harness.emitHook("session_shutdown", {});
   footer.dispose();
 });
